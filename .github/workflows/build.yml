@@ -1,0 +1,59 @@
+name: Build ANGLE
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [macos-arm64, ios-arm64, ios-simulator-arm64]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Depot Tools
+        run: |
+          git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+          echo "$(pwd)/depot_tools" >> $GITHUB_PATH
+
+      - name: Bootstrap ANGLE
+        working-directory: angle
+        run: |
+          python3 scripts/bootstrap.py
+          if [[ "${{ matrix.target }}" == ios-* ]]; then
+            echo "target_os = ['ios']" >> .gclient
+          fi
+          gclient sync
+
+      - name: Generate Build Files (MacOS Arm64)
+        if: matrix.target == 'macos-arm64'
+        working-directory: angle
+        run: |
+          gn gen out/Release --args='is_debug=false target_cpu="arm64" angle_enable_vulkan=false angle_enable_wgpu=false angle_enable_swiftshader=false'
+
+      - name: Generate Build Files (iOS Arm64)
+        if: matrix.target == 'ios-arm64'
+        working-directory: angle
+        run: |
+          gn gen out/Release --args='is_debug=false target_os="ios" target_cpu="arm64" target_environment="device" ios_enable_code_signing=false angle_enable_vulkan=false angle_enable_wgpu=false angle_enable_swiftshader=false'
+
+      - name: Generate Build Files (iOS Simulator Arm64)
+        if: matrix.target == 'ios-simulator-arm64'
+        working-directory: angle
+        run: |
+          gn gen out/Release --args='is_debug=false target_os="ios" target_cpu="arm64" target_environment="simulator" ios_enable_code_signing=false angle_enable_vulkan=false angle_enable_wgpu=false angle_enable_swiftshader=false'
+
+      - name: Build
+        working-directory: angle
+        run: |
+          autoninja -C out/Release libEGL libGLESv2
