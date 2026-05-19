@@ -19,12 +19,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          submodules: recursive
+          submodules: true
+
+      - name: Cache Depot Tools
+        id: cache-depot-tools
+        uses: actions/cache@v4
+        with:
+          path: depot_tools
+          key: ${{ runner.os }}-depot-tools
 
       - name: Setup Depot Tools
+        if: steps.cache-depot-tools.outputs.cache-hit != 'true'
         run: |
           git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
-          echo "$(pwd)/depot_tools" >> $GITHUB_PATH
+
+      - name: Add Depot Tools to PATH
+        run: echo "$(pwd)/depot_tools" >> $GITHUB_PATH
 
       - name: Bootstrap ANGLE
         working-directory: angle
@@ -33,7 +43,7 @@ jobs:
           if [[ "${{ matrix.target }}" == ios-* ]]; then
             echo "target_os = ['ios']" >> .gclient
           fi
-          gclient sync
+          gclient sync --no-history
 
       - name: Generate Build Files (MacOS Arm64)
         if: matrix.target == 'macos-arm64'
@@ -57,3 +67,13 @@ jobs:
         working-directory: angle
         run: |
           autoninja -C out/Release libEGL libGLESv2
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: angle-${{ matrix.target }}
+          path: |
+            angle/out/Release/libEGL.dylib
+            angle/out/Release/libGLESv2.dylib
+            angle/out/Release/libEGL.dylib.dSYM
+            angle/out/Release/libGLESv2.dylib.dSYM
