@@ -67,13 +67,3 @@ jobs:
         working-directory: angle
         run: |
           autoninja -C out/Release libEGL libGLESv2
-
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: angle-${{ matrix.target }}
-          path: |
-            angle/out/Release/libEGL.dylib
-            angle/out/Release/libGLESv2.dylib
-            angle/out/Release/libEGL.dylib.dSYM
-            angle/out/Release/libGLESv2.dylib.dSYM

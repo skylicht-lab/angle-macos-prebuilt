@@ -1,0 +1,137 @@
+name: Release ANGLE
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [macos-arm64, ios-arm64, ios-simulator-arm64]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Cache Depot Tools
+        id: cache-depot-tools
+        uses: actions/cache@v4
+        with:
+          path: depot_tools
+          key: ${{ runner.os }}-depot-tools
+
+      - name: Setup Depot Tools
+        if: steps.cache-depot-tools.outputs.cache-hit != 'true'
+        run: |
+          git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+
+      - name: Add Depot Tools to PATH
+        run: echo "$(pwd)/depot_tools" >> $GITHUB_PATH
+
+      - name: Bootstrap ANGLE
+        working-directory: angle
+        run: |
+          python3 scripts/bootstrap.py
+          if [[ "${{ matrix.target }}" == ios-* ]]; then
+            echo "target_os = ['ios']" >> .gclient
+          fi
+          gclient sync --no-history
+
+      - name: Generate Build Files
+        working-directory: angle
+        run: |
+          if [[ "${{ matrix.target }}" == "macos-arm64" ]]; then
+            gn gen out/Release --args='is_debug=false target_cpu="arm64" angle_enable_vulkan=false angle_enable_wgpu=false angle_enable_swiftshader=false'
+          elif [[ "${{ matrix.target }}" == "ios-arm64" ]]; then
+            gn gen out/Release --args='is_debug=false target_os="ios" target_cpu="arm64" target_environment="device" ios_enable_code_signing=false angle_enable_vulkan=false angle_enable_wgpu=false angle_enable_swiftshader=false'
+          elif [[ "${{ matrix.target }}" == "ios-simulator-arm64" ]]; then
+            gn gen out/Release --args='is_debug=false target_os="ios" target_cpu="arm64" target_environment="simulator" ios_enable_code_signing=false angle_enable_vulkan=false angle_enable_wgpu=false angle_enable_swiftshader=false'
+          fi
+
+      - name: Build
+        working-directory: angle
+        run: |
+          autoninja -C out/Release libEGL libGLESv2
+
+      - name: Prepare Artifacts
+        run: |
+          mkdir -p artifacts_staging
+          cp -R angle/out/Release/libEGL.* artifacts_staging/ 2>/dev/null || true
+          cp -R angle/out/Release/libGLESv2.* artifacts_staging/ 2>/dev/null || true
+
+      - name: Upload Intermediate Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: angle-${{ matrix.target }}
+          path: artifacts_staging/
+
+  release:
+    needs: build
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare Release Structure
+        run: |
+          mkdir -p release/include
+          mkdir -p release/lib/ios/os64
+          mkdir -p release/lib/ios/simulatorarm64
+          mkdir -p release/lib/macos/arm64
+          
+          # Copy headers from angle/include
+          cp -R angle/include/* release/include/
+          
+          # Function to copy lib
+          # Usage: copy_lib <lib_name> <src_artifact_dir> <dest_lib_dir> <ext>
+          copy_lib() {
+            local lib_name=$1
+            local src_dir=$2
+            local dest_dir=$3
+            local ext=$4
+            cp -R "artifacts/${src_dir}/${lib_name}.${ext}" "${dest_dir}/"
+          }
+          
+          # MacOS Arm64
+          copy_lib libEGL "angle-macos-arm64" "release/lib/macos/arm64" "dylib"
+          copy_lib libGLESv2 "angle-macos-arm64" "release/lib/macos/arm64" "dylib"
+          
+          # iOS Arm64 (os64)
+          copy_lib libEGL "angle-ios-arm64" "release/lib/ios/os64" "framework"
+          copy_lib libGLESv2 "angle-ios-arm64" "release/lib/ios/os64" "framework"
+          
+          # iOS Simulator Arm64
+          copy_lib libEGL "angle-ios-simulator-arm64" "release/lib/ios/simulatorarm64" "framework"
+          copy_lib libGLESv2 "angle-ios-simulator-arm64" "release/lib/ios/simulatorarm64" "framework"
+
+      - name: Zip Release
+        run: |
+          cd release
+          zip -r ../angle-macos-ios-prebuilt.zip .
+
+      - name: Upload Release Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: angle-macos-ios-prebuilt
+          path: angle-macos-ios-prebuilt.zip
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: angle-macos-ios-prebuilt.zip
+          generate_release_notes: true
